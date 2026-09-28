@@ -6,6 +6,7 @@ Fill, review and submit ServiceNow time cards from the terminal instead of the p
 - **Defaults:** describe your usual week once; `tc fill` creates it, skipping cards that already exist.
 - **Preview first:** every write shows the week (new cells green, changes `old→new`) and asks.
 - **PTO:** full or partial days; the PTO hours come off your other cards.
+- **One-off changes:** `tc fill mon pto 4, tue general +1` tweaks days without editing config.
 - **Submit:** runs your instance's own submit action (e.g. "Submit for Approval"), so approvals
   and notifications happen exactly as they do in the UI.
 - **TUI:** `tc ui` is an editable grid of the week.
@@ -38,6 +39,20 @@ tc init --from-last   # default rows (and week start) from your latest week
 ```
 
 Session data and config live in `~/.config/timecards/` (session file is `chmod 600`).
+
+## Weekly routine
+
+On Monday, for the week that just ended:
+
+```sh
+tc fill -n                          # 1. preview: defaults + saved PTO (nothing saved)
+tc fill mon pto 4, thu general +1   # 2. save, with any one-off changes (asks first)
+tc show                             # 3. double-check
+tc submit                           # 4. Submit for Approval (asks first)
+```
+
+Plan PTO ahead with `tc pto 2026-12-24..2026-12-31`; every `fill` applies it.
+If your session expired, `tc` offers to open the login window, then continues.
 
 ## Usage
 
@@ -115,6 +130,24 @@ Fill the week that just ended every Monday at 9:00; review and `tc submit` yours
 
 If the SSO session has expired, the job fails with "run `tc login`". In a terminal, `tc`
 offers to open the login window and then re-runs your command.
+
+## Troubleshooting
+
+| Message | Fix |
+|---|---|
+| `Not logged in to ServiceNow. Run tc login.` | SSO session expired: `tc login` (or answer **y** when `tc` offers). |
+| `ServiceNow moved the card to week …` | Set `week_starts_on` to the day it names; the misplaced card was already deleted. |
+| `'admin' matches several cards (…)` | Use a more specific word from the list, e.g. `general` instead of `admin`. |
+| `Task '…' not found` | Log time on it once in the portal, or put its sys_id in `task_id`. |
+| `'Submit for Approval' isn't available` | Set `submit_action` to the label in your instance's time card list actions. |
+| `… is listed twice in config.toml` | Remove the duplicate `[[rows]]` block. |
+
+## Updating
+
+```sh
+cd timecards && git pull
+uv tool install --editable . --force   # refresh the `tc` command (needed when entry points change)
+```
 
 ## License
 

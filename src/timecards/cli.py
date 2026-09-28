@@ -197,7 +197,7 @@ def pto_cmd(
     apply: bool = typer.Option(True, help="Update the affected weeks in ServiceNow now (after a preview)."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Save without asking."),
 ):
-    """Add/remove PTO days (no dates: list them). PTO days zero out other cards on that day."""
+    """Add/remove PTO days (no dates: list them). DATE:4 = 4h partial day; full days zero other cards."""
     cfg = config.load()
     saved = config.load_pto()
     if not dates:

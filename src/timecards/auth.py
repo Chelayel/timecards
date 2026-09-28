@@ -36,6 +36,9 @@ async () => {
 """
 
 
+_LOGIN_FORM = "input[type=password], input[name=identifier], input[name=username], input[type=email]"
+
+
 def _launch(p, cfg: Config, headless: bool):
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
     kw = dict(user_data_dir=str(PROFILE_DIR), headless=headless)
@@ -51,7 +54,7 @@ def harvest(cfg: Config, interactive: bool, timeout_s: int | None = None) -> dic
     """Open the portal, wait until authenticated, and save token + cookies."""
     from playwright.sync_api import sync_playwright
 
-    timeout_s = timeout_s or (300 if interactive else 60)
+    timeout_s = timeout_s or (300 if interactive else 30)
     host = urlparse(cfg.instance).hostname
     result = None
     with sync_playwright() as p:
@@ -66,6 +69,8 @@ def harvest(cfg: Config, interactive: bool, timeout_s: int | None = None) -> dic
                         result = page.evaluate(_PROBE_JS)
                         if result:
                             break
+                    elif not interactive and page.locator(_LOGIN_FORM).count():
+                        break  # the IdP wants credentials: a headless refresh can't finish
                 except Exception:
                     pass  # page mid-navigation during SSO redirects
                 page.wait_for_timeout(1500)

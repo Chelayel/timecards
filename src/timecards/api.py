@@ -289,12 +289,14 @@ class ServiceNow:
                 self.update_card(c)
 
     def plan_week(self, week: date, overwrite: bool = False,
-                  pto_dates: dict[date, float | None] | None = None) -> tuple[list[Card], list[str]]:
-        """The week's cards with missing defaults added and PTO applied. Nothing is saved."""
+                  pto_dates: dict[date, float | None] | None = None,
+                  changes: list | None = None) -> tuple[list[Card], list[str]]:
+        """The week's cards with missing defaults added, then PTO, then per-day changes. Nothing is saved."""
         cards = self.week_cards(week)
         existing = {c.key: c for c in cards}
         log = []
-        for card in self.default_cards():
+        defaults = self.default_cards()
+        for card in defaults:
             key = card.key
             label = f"{card.task_label or '(no task)'} / {card.category}"
             cur = existing.get(key)
@@ -310,7 +312,41 @@ class ServiceNow:
             else:
                 raise ApiError(f"{label} is listed twice in config.toml [[rows]]; remove one.")
         log += self.apply_pto(cards, self.pto_days(week, pto_dates or {}))
+        log += self.apply_changes(cards, changes or [], {c.key: c.hours for c in defaults})
         return cards, log
+
+    def apply_changes(self, cards: list[Card], changes: list, default_hours: dict[tuple, dict]) -> list[str]:
+        """Apply overrides.Override items (in place)."""
+        log = []
+        for ch in changes:
+            if ch.target == "pto":
+                log += self.apply_pto(cards, {ch.day: ch.hours})
+                continue
+            card = self._match(cards, ch.target)
+            if not card.editable:
+                raise ApiError(f"{self._label(card)} is {card.state}; can't change it.")
+            base = default_hours.get(card.key, card.hours)[ch.day] if ch.relative else 0.0
+            new = max(0.0, base + ch.hours)
+            if card.hours[ch.day] != new:
+                card.hours[ch.day], card.dirty = new, True
+            log.append(f"change   {ch.day[:3].title()} {self._label(card)}: {new:g}h")
+        return log
+
+    @staticmethod
+    def _label(c: Card) -> str:
+        return "/".join([c.task_label or c.category, *(v for v in c.fields.values() if v)])
+
+    def _match(self, cards: list[Card], word: str) -> Card:
+        """The one card that `word` identifies (category, field value, or task number/title)."""
+        live = [c for c in cards if not c.deleted]
+        exact = [c for c in live if word == c.category.lower() or word in (v.lower() for v in c.fields.values())]
+        found = exact or [c for c in live if c.task_label and word in c.task_label.lower()]
+        if len(found) == 1:
+            return found[0]
+        names = ", ".join(self._label(c) for c in (found or live))
+        if not found:
+            raise ApiError(f"No card matches {word!r}. Cards: {names}")
+        raise ApiError(f"{word!r} matches several cards ({names}); use a more specific word.")
 
     def fill_week(self, week: date, overwrite: bool = False,
                   pto_dates: dict[date, float | None] | None = None) -> list[str]:

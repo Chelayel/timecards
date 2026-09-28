@@ -8,8 +8,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from . import auth, config
-from .api import ServiceNow
+from . import auth, config, overrides
+from .api import ApiError, ServiceNow
 
 app = typer.Typer(no_args_is_help=True, help="ServiceNow time cards without the portal.")
 console = Console()
@@ -147,8 +147,9 @@ def show(week: str = WeekOpt, offset: int = OffsetOpt):
     _print_week(ServiceNow(cfg), _week(cfg, week, offset))
 
 
-@app.command()
+@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def fill(
+    ctx: typer.Context,
     week: str = WeekOpt,
     offset: int = OffsetOpt,
     overwrite: bool = typer.Option(False, help="Reset hours of existing pending cards to defaults."),
@@ -157,7 +158,20 @@ def fill(
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Only show what would be saved."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Save (and submit) without asking, e.g. from cron."),
 ):
-    """Preview this week's cards from your defaults + PTO, then save after you confirm."""
+    """Preview the week from your defaults + PTO, then save after you confirm.
+
+    Add per-day changes after the options: DAY CARD HOURS, comma separated, e.g.
+
+        tc fill mon pto 4, tue general +1, fri task_work 6
+
+    CARD is "pto" or a word matching one card (category, field value, task number/title).
+    HOURS sets the value; +N/-N adjusts the default for that day; "pto" alone = full day.
+    """
+    try:
+        changes = overrides.parse(ctx.args)
+    except overrides.OverrideError as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(2)
     cfg = config.load()
     if not cfg.rows:
         console.print("[red]No [[rows]] in config. Edit it or run `tc init --from-last`.[/]")
@@ -165,7 +179,13 @@ def fill(
     sn = ServiceNow(cfg)
     wk = _week(cfg, week, offset)
     pto_dates = config.load_pto() | config.parse_dates(pto, _workdays(cfg))
-    _plan_and_save(sn, wk, yes, dry_run, overwrite=overwrite, pto_dates=pto_dates)
+    if changes:
+        console.print("Changes: " + ", ".join(map(str, changes)))
+    try:
+        _plan_and_save(sn, wk, yes, dry_run, overwrite=overwrite, pto_dates=pto_dates, changes=changes)
+    except ApiError as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(1)
     if submit and not dry_run and (yes or typer.confirm("Submit this week?")):
         console.print(sn.submit_week(wk))
 
@@ -268,4 +288,17 @@ def ui(week: str = WeekOpt, offset: int = OffsetOpt):
 
 
 def main():
-    app()
+    """Entry point: short errors instead of tracebacks, and offer to log in when the session expired."""
+    import sys
+
+    try:
+        app()
+    except auth.NeedLogin as e:
+        if not (sys.stdin.isatty() and typer.confirm(f"{e} Log in now?", default=True)):
+            console.print(f"[red]{e}[/]")
+            raise SystemExit(1)
+        login()
+        app()  # run the original command again
+    except (ApiError, ValueError) as e:
+        console.print(f"[red]{e}[/]")
+        raise SystemExit(1)

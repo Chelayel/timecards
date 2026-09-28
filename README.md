@@ -46,13 +46,27 @@ Commands act on **last week** by default (`default_week = -1`); use `-o 0` for t
 
 | Command | What it does |
 |---|---|
-| `tc fill` | Preview defaults + PTO for the week, save on confirm (`-n` dry run, `-y` no prompt, `--pto DATE`, `--overwrite`) |
+| `tc fill [mon pto 4, tue general +1 …]` | Preview defaults + PTO + one-off changes, save on confirm (`-n` dry run, `-y` no prompt, `--pto DATE`, `--overwrite`) |
 | `tc show` | Show the week |
 | `tc ui` | Grid editor: Enter edit · a add · x delete · f fill · p PTO day · s save · S submit · [ ] week |
 | `tc submit` | Show the week, then run `submit_action` on its editable cards (`-n` to check only) |
 | `tc pto 2026-10-12 2026-10-16:4 2026-12-24..2026-12-31` | Save PTO days (`:4` = 4h; ranges skip weekends); `tc pto` lists, `-r` removes |
 | `tc clear` | Delete the week's editable cards (after a preview + confirm) |
 | `tc discover` | Recent cards, category/task combos, and `time_card` field names |
+
+### One-off changes on the fill line
+
+Add `DAY CARD HOURS` groups after `tc fill` to change specific days for this run:
+
+```sh
+tc fill mon pto 4, tue general +1, fri task_work 6
+tc fill wed pto            # full PTO day
+```
+
+- `CARD` is `pto`, or one word that identifies a single card: its category, a field value
+  (e.g. a subcategory), or part of the task number/title.
+- `4` sets the hours; `+1` / `-1` adjust your default hours for that day (re-running never
+  adds twice); `pto` without hours is a full day. PTO hours come off the other cards.
 
 ## Configuration
 
@@ -99,7 +113,8 @@ Fill the week that just ended every Monday at 9:00; review and `tc submit` yours
 (crontab -l 2>/dev/null; echo "0 9 * * 1 $(which tc) fill --yes >> ~/.config/timecards/fill.log 2>&1") | crontab -
 ```
 
-If the SSO session has expired, the job fails with "run `tc login`".
+If the SSO session has expired, the job fails with "run `tc login`". In a terminal, `tc`
+offers to open the login window and then re-runs your command.
 
 ## License
 

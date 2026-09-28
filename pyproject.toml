@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-tc = "timecards.cli:app"
+tc = "timecards.cli:main"
 
 [build-system]
 requires = ["hatchling"]

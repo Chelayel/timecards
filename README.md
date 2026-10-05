@@ -3,7 +3,8 @@
 Fill, review and submit ServiceNow time cards from the terminal instead of the portal.
 
 - **SSO-friendly:** `tc login` opens a real browser once; the session is reused for API calls.
-- **Defaults:** describe your usual week once; `tc fill` creates it, skipping cards that already exist.
+- **Copies your last week:** `tc fill` repeats your most recent week without PTO (tasks, categories,
+  hours), skipping cards that already exist. Config `[[rows]]` are the fallback (or `--defaults`).
 - **Preview first:** every write shows the week (new cells green, changes `old→new`) and asks.
 - **PTO:** full or partial days; the PTO hours come off your other cards.
 - **One-off changes:** `tc fill mon pto 4, tue general +1` tweaks days without editing config.
@@ -48,7 +49,7 @@ Session data and config live in `~/.config/timecards/` (session file is `chmod 6
 On Monday, for the week that just ended:
 
 ```sh
-tc fill -n                          # 1. preview: defaults + saved PTO (nothing saved)
+tc fill -n                          # 1. preview: the week before + saved PTO (nothing saved)
 tc fill mon pto 4, thu general +1   # 2. save, with any one-off changes (asks first)
 tc show                             # 3. double-check
 tc submit                           # 4. Submit for Approval (asks first)
@@ -64,7 +65,7 @@ Commands act on **last week** by default (`default_week = -1`); use `-o 0` for t
 
 | Command | What it does |
 |---|---|
-| `tc fill [mon pto 4, tue general +1 …]` | Preview defaults + PTO + one-off changes, save on confirm (`-n` dry run, `-y` no prompt, `--pto DATE`, `--overwrite`) |
+| `tc fill [mon pto 4, tue general +1 …]` | Preview the week before (or `--defaults`) + PTO + one-off changes, save on confirm (`-n` dry run, `-y` no prompt, `--pto DATE`, `--overwrite`) |
 | `tc show` | Show the week |
 | `tc ui` | Grid editor: Enter edit · a add · x delete · f fill · p PTO day · s save · S submit · [ ] week |
 | `tc submit` | Show the week, then run `submit_action` on its editable cards (`-n` to check only) |
@@ -83,7 +84,7 @@ tc fill wed pto            # full PTO day
 
 - `CARD` is `pto`, or one word that identifies a single card: its category, a field value
   (e.g. a subcategory), or part of the task number/title.
-- `4` sets the hours; `+1` / `-1` adjust your default hours for that day (re-running never
+- `4` sets the hours; `+1` / `-1` adjust the copied (or default) hours for that day (re-running never
   adds twice); `pto` without hours is a full day. PTO hours come off the other cards.
 
 ## Configuration
@@ -96,6 +97,7 @@ instance = "https://example.service-now.com"
 portal_page = "/sp"
 week_starts_on = "monday"
 default_week = -1
+fill_from = "last_week"     # or "defaults" to always use [[rows]]
 editable_states = ["Active", "Pending", "Rejected"]
 submit_action = "Submit for Approval"
 
@@ -116,6 +118,9 @@ fields = { u_subcategory = "pto" }
 hours = 8
 ```
 
+- **What fill starts from:** with `fill_from = "last_week"`, the most recent week (up to 8 back)
+  that has cards and no PTO is copied — a PTO week has other cards zeroed, so it's skipped.
+  If there is none, `[[rows]]` are used. The preview says which: `Based on: copied from week of …`.
 - **Tasks** can be a number, the title ServiceNow displays, or a sys_id (`task_id`). Titles are
   matched against tasks you've logged time on before, since titles repeat across projects.
 - **Week start:** if a created card lands in a different week, it is deleted immediately and
@@ -145,6 +150,12 @@ offers to open the login window and then re-runs your command.
 | `Task '…' not found` | Log time on it once in the portal, or put its sys_id in `task_id`. |
 | `'Submit for Approval' isn't available` | Set `submit_action` to the label in your instance's time card list actions. |
 | `… is listed twice in config.toml` | Remove the duplicate `[[rows]]` block. |
+
+## Development
+
+```sh
+uv run pytest   # tests run against an in-memory fake of the time_card table
+```
 
 ## Updating
 

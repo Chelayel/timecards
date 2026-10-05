@@ -31,6 +31,10 @@ week_starts_on = "monday"
 # Week that commands use without --week/--offset: -1 = previous week, 0 = this week.
 default_week = -1
 
+# What `tc fill` starts from: "last_week" copies your most recent week without PTO
+# (falls back to [[rows]]); "defaults" always uses the [[rows]] below.
+fill_from = "last_week"
+
 # time_card states you can still edit, and the time_card list action `tc submit` runs on them
 # (the label in "Actions on selected rows..." on your instance).
 editable_states = ["Active", "Pending", "Rejected"]
@@ -86,6 +90,7 @@ class Config:
     editable_states: list[str] = field(default_factory=lambda: ["Active", "Pending", "Rejected"])
     submit_action: str = "Submit for Approval"
     default_week: int = -1
+    fill_from: str = "last_week"
     extra_fields: list[str] = field(default_factory=list)
     rows: list[DefaultRow] = field(default_factory=list)
     pto: DefaultRow | None = None  # hours holds a single "day" entry: hours per PTO day
@@ -120,6 +125,8 @@ def ensure_config() -> bool:
 def load() -> Config:
     ensure_config()
     raw = tomllib.loads(CONFIG_FILE.read_text())
+    if raw.get("fill_from", "last_week") not in ("last_week", "defaults"):
+        raise ValueError('fill_from must be "last_week" or "defaults"')
     week_start = raw.get("week_starts_on", "monday").lower()
     if week_start not in DAYS:
         raise ValueError(f"week_starts_on must be one of {DAYS}, got {week_start!r}")
@@ -148,6 +155,7 @@ def load() -> Config:
         editable_states=raw.get("editable_states", ["Active", "Pending", "Rejected"]),
         submit_action=raw.get("submit_action", "Submit for Approval"),
         default_week=int(raw.get("default_week", -1)),
+        fill_from=raw.get("fill_from", "last_week"),
         extra_fields=list(raw.get("extra_fields", [])),
         rows=rows,
         pto=pto,

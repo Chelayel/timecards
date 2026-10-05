@@ -225,6 +225,40 @@ class ServiceNow:
                             hours={d: r.hours.get(d, 0.0) for d in DAYS}, fields=dict(r.fields), dirty=True))
         return out
 
+    def is_pto(self, c: Card) -> bool:
+        p = self.cfg.pto
+        return bool(p) and c.category == p.category and all(c.fields.get(k) == v for k, v in p.fields.items())
+
+    def source_cards(self, week: date, use_defaults: bool = False) -> tuple[list[Card], str]:
+        """Unsaved cards to base `week` on, and a description of where they came from.
+
+        fill_from = "last_week": copy the most recent earlier week that has cards and no PTO
+        (PTO zeroes other cards, so such a week isn't a typical one). Falls back to config rows.
+        """
+        if not use_defaults and self.cfg.fill_from == "last_week":
+            q = (f"user={self.me['sys_id']}^week_starts_on<{week.isoformat()}"
+                 f"^week_starts_on>={(week - timedelta(weeks=8)).isoformat()}^state!=Cancelled^ORDERBYDESCweek_starts_on")
+            by_week: dict[str, list[Card]] = {}
+            for rec in self._query_cards(q):
+                by_week.setdefault(_v(rec, "week_starts_on"), []).append(self._to_card(rec))
+            for wk in sorted(by_week, reverse=True):
+                cards = [c for c in by_week[wk] if c.total]
+                if not cards or any(self.is_pto(c) for c in cards):
+                    continue
+                merged: dict[tuple, Card] = {}
+                for c in cards:  # identical cards in one week: keep the hours that were logged
+                    if c.key in merged:
+                        m = merged[c.key]
+                        m.hours = {d: m.hours[d] + c.hours[d] for d in DAYS}
+                    else:
+                        merged[c.key] = Card(sys_id=None, task_id=c.task_id, task_label=c.task_label,
+                                             category=c.category, hours=dict(c.hours), fields=dict(c.fields),
+                                             dirty=True)
+                return list(merged.values()), f"copied from week of {wk}"
+        if not self.cfg.rows:
+            raise ApiError("No earlier week to copy and no [[rows]] in config.toml.")
+        return self.default_cards(), "from config defaults"
+
     def pto_card(self) -> Card:
         """Unsaved, empty card for PTO (from the [pto] config section)."""
         if not self.cfg.pto:
@@ -290,12 +324,13 @@ class ServiceNow:
 
     def plan_week(self, week: date, overwrite: bool = False,
                   pto_dates: dict[date, float | None] | None = None,
-                  changes: list | None = None) -> tuple[list[Card], list[str]]:
+                  changes: list | None = None, use_defaults: bool = False) -> tuple[list[Card], list[str]]:
         """The week's cards with missing defaults added, then PTO, then per-day changes. Nothing is saved."""
         cards = self.week_cards(week)
         existing = {c.key: c for c in cards}
         log = []
-        defaults = self.default_cards()
+        defaults, source = self.source_cards(week, use_defaults)
+        log.append(f"source   {source}")
         for card in defaults:
             key = card.key
             label = f"{card.task_label or '(no task)'} / {card.category}"
@@ -310,7 +345,7 @@ class ServiceNow:
             elif cur.sys_id:
                 log.append(f"exists   {label} [{cur.state}]")
             else:
-                raise ApiError(f"{label} is listed twice in config.toml [[rows]]; remove one.")
+                raise ApiError(f"{label} is listed twice ({source}); remove one.")
         log += self.apply_pto(cards, self.pto_days(week, pto_dates or {}))
         log += self.apply_changes(cards, changes or [], {c.key: c.hours for c in defaults})
         return cards, log

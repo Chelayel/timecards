@@ -121,7 +121,7 @@ class TimecardApp(App):
     @work(thread=True, exclusive=True)
     def action_fill(self) -> None:
         try:
-            defaults = self.sn.default_cards()
+            defaults, _ = self.sn.source_cards(self.week)
         except Exception as e:
             self.call_from_thread(self.fail, e)
             return
@@ -137,7 +137,7 @@ class TimecardApp(App):
         except Exception as e:
             self.call_from_thread(self.fail, e)
         self.call_from_thread(self.render_grid)
-        self.call_from_thread(self.notify, "Filled from defaults. Press s to save.")
+        self.call_from_thread(self.notify, "Filled (copied from the week before, or defaults). Press s to save.")
 
     @work(thread=True, exclusive=True)
     def action_save(self) -> None:

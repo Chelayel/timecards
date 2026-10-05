@@ -24,11 +24,6 @@ def _week(cfg: config.Config, week: str | None, offset: int | None) -> date:
     return cfg.week_start() + timedelta(weeks=cfg.default_week if offset is None else offset)
 
 
-def _is_pto(cfg: config.Config, c) -> bool:
-    p = cfg.pto
-    return bool(p) and c.category == p.category and all(c.fields.get(k) == v for k, v in p.fields.items())
-
-
 def _workdays(cfg: config.Config) -> set[str]:
     """Days that have default hours; ranges of PTO dates skip the others (weekends)."""
     return {d for r in cfg.rows for d, h in r.hours.items() if h} or set(config.DAYS[1:6])
@@ -75,6 +70,9 @@ def _print_week(sn: ServiceNow, week: date, cards=None, title: str | None = None
 def _plan_and_save(sn: ServiceNow, wk: date, yes: bool, dry_run: bool, **plan) -> bool:
     """Show what a fill would do, ask, then save. Returns True if something was saved."""
     cards, log = sn.plan_week(wk, **plan)
+    for line in log:
+        if line.startswith("source"):
+            console.print(f"Based on: {line.split(None, 1)[1]}")
     changes = _pending(cards)
     _print_week(sn, wk, cards, title=f"Week of {wk:%a %b %d, %Y} — preview")
     if not changes:
@@ -123,14 +121,15 @@ def init(
         console.print(", ".join(f"{k} = {v}" for k, v in values.items()))
     if from_last:
         cfg = config.load()
-        recent = ServiceNow(cfg).recent_cards()
+        sn = ServiceNow(cfg)
+        recent = sn.recent_cards()
         if not recent:
             console.print("[yellow]No previous time cards found.[/]")
             raise typer.Exit(1)
         latest = recent[0][0]
         rows = [config.DefaultRow(task=c.task_label, task_id=c.task_id, category=c.category, fields=c.fields,
                                   hours={d: c.hours[d] for d in config.DAYS if c.hours[d]})
-                for w, c, _ in recent if w == latest and c.total and not _is_pto(cfg, c)]
+                for w, c, _ in recent if w == latest and c.total and not sn.is_pto(c)]
         seen = set()  # a week with duplicate cards must not produce duplicate defaults
         rows = [r for r in rows if (k := (r.task_id, r.category, tuple(sorted(r.fields.items())))) not in seen
                 and not seen.add(k)]
@@ -165,13 +164,14 @@ def fill(
     ctx: typer.Context,
     week: str = WeekOpt,
     offset: int = OffsetOpt,
-    overwrite: bool = typer.Option(False, help="Reset hours of existing pending cards to defaults."),
+    overwrite: bool = typer.Option(False, help="Reset hours of existing editable cards to the source week/defaults."),
+    defaults: bool = typer.Option(False, "--defaults", help="Start from config [[rows]] instead of copying the week before."),
     pto: list[str] = typer.Option([], "--pto", "-p", help="PTO for this run: YYYY-MM-DD[:HOURS], a..b ranges, commas."),
     submit: bool = typer.Option(False, help="Submit the week after filling."),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Only show what would be saved."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Save (and submit) without asking, e.g. from cron."),
 ):
-    """Preview the week from your defaults + PTO, then save after you confirm.
+    """Preview the week (copied from the week before, or your defaults) + PTO, then save after you confirm.
 
     Add per-day changes after the options: DAY CARD HOURS, comma separated, e.g.
 
@@ -186,16 +186,14 @@ def fill(
         console.print(f"[red]{e}[/]")
         raise typer.Exit(2)
     cfg = config.load()
-    if not cfg.rows:
-        console.print("[red]No [[rows]] in config. Edit it or run `tc init --from-last`.[/]")
-        raise typer.Exit(1)
     sn = ServiceNow(cfg)
     wk = _week(cfg, week, offset)
     pto_dates = config.load_pto() | config.parse_dates(pto, _workdays(cfg))
     if changes:
         console.print("Changes: " + ", ".join(map(str, changes)))
     try:
-        _plan_and_save(sn, wk, yes, dry_run, overwrite=overwrite, pto_dates=pto_dates, changes=changes)
+        _plan_and_save(sn, wk, yes, dry_run, overwrite=overwrite, pto_dates=pto_dates, changes=changes,
+                       use_defaults=defaults)
     except ApiError as e:
         console.print(f"[red]{e}[/]")
         raise typer.Exit(1)

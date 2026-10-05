@@ -277,6 +277,10 @@ class ServiceNow:
             return []
         tmpl = self.pto_card()
         pto = next((c for c in cards if not c.deleted and c.key == tmpl.key), None)
+        if pto is None:  # reuse a PTO card that --replace was about to delete
+            pto = next((c for c in cards if c.deleted and c.key == tmpl.key), None)
+            if pto is not None:
+                pto.deleted, pto.hours, pto.dirty = False, {d: 0.0 for d in DAYS}, True
         if pto is None:
             pto = tmpl
             cards.append(pto)
@@ -324,8 +328,14 @@ class ServiceNow:
 
     def plan_week(self, week: date, overwrite: bool = False,
                   pto_dates: dict[date, float | None] | None = None,
-                  changes: list | None = None, use_defaults: bool = False) -> tuple[list[Card], list[str]]:
-        """The week's cards with missing defaults added, then PTO, then per-day changes. Nothing is saved."""
+                  changes: list | None = None, use_defaults: bool = False,
+                  replace: bool = False) -> tuple[list[Card], list[str]]:
+        """The week's cards with missing source cards added, then PTO, then per-day changes. Nothing is saved.
+
+        replace: make the week match the source exactly: reset matching cards' hours and delete
+        editable cards that aren't in the source (e.g. left over from an earlier wrong fill).
+        """
+        overwrite = overwrite or replace
         cards = self.week_cards(week)
         existing = {c.key: c for c in cards}
         log = []
@@ -346,6 +356,14 @@ class ServiceNow:
                 log.append(f"exists   {label} [{cur.state}]")
             else:
                 raise ApiError(f"{label} is listed twice ({source}); remove one.")
+        wanted = {c.key for c in defaults}
+        for c in cards:
+            if c.sys_id and c.editable and c.key not in wanted and c.total:
+                if replace:
+                    c.deleted = True
+                    log.append(f"delete   {c.task_label or '(no task)'} / {c.category}")
+                elif not self.is_pto(c):
+                    log.append(f"extra    {'/'.join([c.task_label or c.category, *c.fields.values()])}")
         log += self.apply_pto(cards, self.pto_days(week, pto_dates or {}))
         log += self.apply_changes(cards, changes or [], {c.key: c.hours for c in defaults})
         return cards, log

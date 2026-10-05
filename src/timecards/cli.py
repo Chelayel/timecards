@@ -30,8 +30,10 @@ def _workdays(cfg: config.Config) -> set[str]:
 
 
 def _pending(cards) -> list:
-    """Cards that saving would create or change."""
-    return [c for c in cards if (c.sys_id is None and c.total) or (c.sys_id and c.dirty and c.hours != c.orig)]
+    """Cards that saving would create, change or delete."""
+    return [c for c in cards if (c.sys_id is None and c.total and not c.deleted)
+            or (c.sys_id and c.deleted)
+            or (c.sys_id and c.dirty and c.hours != c.orig)]
 
 
 def _print_week(sn: ServiceNow, week: date, cards=None, title: str | None = None) -> None:
@@ -39,7 +41,8 @@ def _print_week(sn: ServiceNow, week: date, cards=None, title: str | None = None
     cfg = sn.cfg
     if cards is None:
         cards = sn.week_cards(week)
-    cards = [c for c in cards if not c.deleted and (c.sys_id or c.total)]
+    cards = [c for c in cards if c.sys_id or (c.total and not c.deleted)]
+    live = [c for c in cards if not c.deleted]
     t = Table(title=title or f"Week of {week:%a %b %d, %Y}")
     t.add_column("Task", no_wrap=True, overflow="ellipsis", max_width=20)
     t.add_column("Category", no_wrap=True)
@@ -50,6 +53,8 @@ def _print_week(sn: ServiceNow, week: date, cards=None, title: str | None = None
 
     def cell(c, d):
         h = c.hours[d]
+        if c.deleted:
+            return f"[red strike]{h:g}[/]"
         if c.sys_id is None:
             return f"[green]{h:g}[/]"
         if c.orig and h != c.orig[d]:
@@ -58,12 +63,18 @@ def _print_week(sn: ServiceNow, week: date, cards=None, title: str | None = None
 
     for c in cards:
         cat = "/".join([c.category, *(v for v in c.fields.values() if v)])
-        state = "[green]new[/]" if c.sys_id is None else (f"[yellow]{c.state}*[/]" if c in _pending(cards) else c.state)
-        t.add_row(c.task_label or "-", cat, *[cell(c, d) for d in cfg.week_days], f"{c.total:g}", state)
+        if c.deleted:
+            state = "[red]delete[/]"
+        elif c.sys_id is None:
+            state = "[green]new[/]"
+        else:
+            state = f"[yellow]{c.state}*[/]" if c in _pending(cards) else c.state
+        total = f"[red strike]{c.total:g}[/]" if c.deleted else f"{c.total:g}"
+        t.add_row(c.task_label or "-", cat, *[cell(c, d) for d in cfg.week_days], total, state)
     if cards:
         t.add_section()
-        t.add_row("", "Total", *[f"{sum(c.hours[d] for c in cards):g}" for d in cfg.week_days],
-                  f"{sum(c.total for c in cards):g}", "")
+        t.add_row("", "Total", *[f"{sum(c.hours[d] for c in live):g}" for d in cfg.week_days],
+                  f"{sum(c.total for c in live):g}", "")
     console.print(t if cards else f"[yellow]No time cards for week of {week}.[/]")
 
 
@@ -75,12 +86,17 @@ def _plan_and_save(sn: ServiceNow, wk: date, yes: bool, dry_run: bool, **plan) -
             console.print(f"Based on: {line.split(None, 1)[1]}")
     changes = _pending(cards)
     _print_week(sn, wk, cards, title=f"Week of {wk:%a %b %d, %Y} — preview")
+    extra = [line.split(None, 1)[1] for line in log if line.startswith("extra")]
+    if extra:
+        console.print(f"[yellow]Already in this week but not in the source: {', '.join(extra)}. "
+                      "Run with --replace to remove them.[/]")
     if not changes:
         console.print("Nothing to change.")
         return False
     new = sum(c.sys_id is None for c in changes)
-    console.print(f"{new} card(s) to create, {len(changes) - new} to update "
-                  "([green]green[/] = new, [yellow]yellow[/] = changed).")
+    gone = sum(bool(c.deleted) for c in changes)
+    console.print(f"{new} card(s) to create, {len(changes) - new - gone} to update, {gone} to delete "
+                  "([green]green[/] = new, [yellow]yellow[/] = changed, [red]red[/] = deleted).")
     if dry_run:
         console.print("Dry run: nothing saved.")
         return False
@@ -166,6 +182,7 @@ def fill(
     offset: int = OffsetOpt,
     overwrite: bool = typer.Option(False, help="Reset hours of existing editable cards to the source week/defaults."),
     defaults: bool = typer.Option(False, "--defaults", help="Start from config [[rows]] instead of copying the week before."),
+    replace: bool = typer.Option(False, "--replace", help="Make the week match the source: reset hours and delete other editable cards."),
     pto: list[str] = typer.Option([], "--pto", "-p", help="PTO for this run: YYYY-MM-DD[:HOURS], a..b ranges, commas."),
     submit: bool = typer.Option(False, help="Submit the week after filling."),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Only show what would be saved."),
@@ -193,7 +210,7 @@ def fill(
         console.print("Changes: " + ", ".join(map(str, changes)))
     try:
         _plan_and_save(sn, wk, yes, dry_run, overwrite=overwrite, pto_dates=pto_dates, changes=changes,
-                       use_defaults=defaults)
+                       use_defaults=defaults, replace=replace)
     except ApiError as e:
         console.print(f"[red]{e}[/]")
         raise typer.Exit(1)

@@ -100,3 +100,38 @@ def test_parse_overrides_and_dates():
         [date(2026, 9, 30), date(2026, 10, 1), date(2026, 10, 2)]
     assert config.parse_dates(["2026-10-05:4"], set()) == {date(2026, 10, 5): 4.0}
     assert config.normalize_instance("acme") == "https://acme.service-now.com"
+
+
+def _prev_week(sn):
+    sn.add(PREV, "task_work", {d: 7 for d in WEEKDAYS}, task=TASK)
+    sn.add(PREV, "admin", {d: 1 for d in WEEKDAYS}, u_subcategory="general")
+
+
+def test_earlier_wrong_fill_is_reported_then_replaced(sn):
+    _prev_week(sn)
+    wrong = sn.add("2026-09-28", "admin", {d: 8 for d in WEEKDAYS}, state="Active")  # old generic defaults
+    cards, log = sn.plan_week(WEEK)
+    assert any(line.startswith("extra    admin") for line in log)
+    assert not next(c for c in cards if c.sys_id == wrong).deleted
+    fill(sn, replace=True)
+    assert wrong not in sn.db
+    h = week_hours(sn, WEEK)
+    assert set(h) == {"task_work", "general"} and h["task_work"]["monday"] == 7
+
+
+def test_replace_resets_hours_and_keeps_frozen(sn):
+    _prev_week(sn)
+    sn.add("2026-09-28", "task_work", {d: 14 for d in WEEKDAYS}, task=TASK, state="Active")
+    frozen = sn.add("2026-09-28", "meeting", {"monday": 2}, state="Frozen")
+    fill(sn, replace=True)
+    assert frozen in sn.db
+    assert week_hours(sn, WEEK)["task_work"]["monday"] == 7
+
+
+def test_replace_reuses_existing_pto_card(sn):
+    _prev_week(sn)
+    pto = sn.add("2026-09-28", "admin", {"monday": 8, "tuesday": 8}, state="Active", u_subcategory="pto")
+    fill(sn, replace=True, pto_dates={date(2026, 9, 29): None})
+    assert pto in sn.db  # same card, hours reset to the new PTO days only
+    h = week_hours(sn, WEEK)["pto"]
+    assert (h["monday"], h["tuesday"]) == (0, 8)

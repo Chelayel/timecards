@@ -65,7 +65,7 @@ Commands act on **last week** by default (`default_week = -1`); use `-o 0` for t
 
 | Command | What it does |
 |---|---|
-| `tc fill [mon pto 4, tue general +1 …]` | Preview the week before (or `--defaults`) + PTO + one-off changes, save on confirm (`-n` dry run, `-y` no prompt, `--pto DATE`, `--overwrite`) |
+| `tc fill [mon pto 4, tue general +1 …]` | Preview the week before (or `--defaults`) + PTO + one-off changes, save on confirm (`-n` dry run, `-y` no prompt, `--pto DATE`, `--replace`) |
 | `tc show` | Show the week |
 | `tc ui` | Grid editor: Enter edit · a add · x delete · f fill · p PTO day · s save · S submit · [ ] week |
 | `tc submit` | Show the week, then run `submit_action` on its editable cards (`-n` to check only) |
@@ -121,6 +121,10 @@ hours = 8
 - **What fill starts from:** with `fill_from = "last_week"`, the most recent week (up to 8 back)
   that has cards and no PTO is copied — a PTO week has other cards zeroed, so it's skipped.
   If there is none, `[[rows]]` are used. The preview says which: `Based on: copied from week of …`.
+- **A week that already has cards:** `fill` only adds what's missing, and warns about editable
+  cards that aren't in the source (e.g. from an earlier fill with other defaults).
+  `tc fill --replace` makes the week match the source: hours reset, other editable cards
+  deleted (shown in red in the preview). Submitted/frozen cards are never touched.
 - **Tasks** can be a number, the title ServiceNow displays, or a sys_id (`task_id`). Titles are
   matched against tasks you've logged time on before, since titles repeat across projects.
 - **Week start:** if a created card lands in a different week, it is deleted immediately and
@@ -149,7 +153,8 @@ offers to open the login window and then re-runs your command.
 | `'admin' matches several cards (…)` | Use a more specific word from the list, e.g. `general` instead of `admin`. |
 | `Task '…' not found` | Log time on it once in the portal, or put its sys_id in `task_id`. |
 | `'Submit for Approval' isn't available` | Set `submit_action` to the label in your instance's time card list actions. |
-| `… is listed twice in config.toml` | Remove the duplicate `[[rows]]` block. |
+| `Already in this week but not in the source: …` | Check the preview; `tc fill --replace` removes those cards. |
+| `… is listed twice …` | Remove the duplicate `[[rows]]` block. |
 
 ## Development
 

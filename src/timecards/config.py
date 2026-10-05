@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -12,6 +14,7 @@ CONFIG_FILE = CONFIG_DIR / "config.toml"
 SESSION_FILE = CONFIG_DIR / "session.json"
 PROFILE_DIR = CONFIG_DIR / "browser-profile"
 PTO_FILE = CONFIG_DIR / "pto.txt"
+PLACEHOLDER_HOST = "YOUR-INSTANCE"
 
 # ServiceNow time_card day fields, Sunday-first like the platform.
 DAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
@@ -134,9 +137,12 @@ def load() -> Config:
             pto = DefaultRow(task=p.get("task", ""), category=p.get("category", ""),
                              hours={"day": float(p.get("hours", 8))}, task_id=p.get("task_id", ""),
                              fields=dict(p.get("fields", {})))
+    # Environment variables win over the file (handy for a second machine or CI).
+    instance = os.environ.get("TC_INSTANCE") or raw.get("instance", "")
+    portal_page = os.environ.get("TC_PORTAL_PAGE") or raw.get("portal_page", "/sp")
     return Config(
-        instance=raw.get("instance", "").rstrip("/"),
-        portal_page=raw.get("portal_page", "/sp"),
+        instance=normalize_instance(instance),
+        portal_page=portal_page if portal_page.startswith("/") else "/" + portal_page,
         week_starts_on=week_start,
         browser_channel=raw.get("browser_channel", "chrome"),
         editable_states=raw.get("editable_states", ["Active", "Pending", "Rejected"]),
@@ -146,6 +152,28 @@ def load() -> Config:
         rows=rows,
         pto=pto,
     )
+
+
+def normalize_instance(url: str) -> str:
+    """'cardinal' or 'cardinal.service-now.com' -> 'https://cardinal.service-now.com'."""
+    url = url.strip().rstrip("/")
+    if url and "." not in url and "://" not in url:
+        url += ".service-now.com"
+    if url and "://" not in url:
+        url = "https://" + url
+    return url
+
+
+def set_values(**values: str) -> None:
+    """Replace top-level `key = "..."` lines in config.toml (adding missing keys at the top)."""
+    ensure_config()
+    text = CONFIG_FILE.read_text()
+    for key, value in values.items():
+        line = f'{key} = "{value}"'
+        text, n = re.subn(rf'(?m)^{key}\s*=.*$', line.replace("\\", "\\\\"), text, count=1)
+        if not n:
+            text = line + "\n" + text
+    CONFIG_FILE.write_text(text)
 
 
 def render_rows(rows: list[DefaultRow]) -> str:

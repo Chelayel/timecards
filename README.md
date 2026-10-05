@@ -27,10 +27,13 @@ Fill, review and submit ServiceNow time cards from the terminal instead of the p
 git clone https://github.com/Chelayel/timecards && cd timecards
 uv tool install --editable .      # installs the `tc` command
 uvx playwright install chromium   # only needed if you don't have Chrome
-tc init                           # writes ~/.config/timecards/config.toml
+tc init --instance acme --portal-page /sp   # writes ~/.config/timecards/config.toml
 ```
 
-Set `instance` in `~/.config/timecards/config.toml`, then:
+`--instance` takes a name (`acme` → `https://acme.service-now.com`) or a full URL.
+`--portal-page` is any page on the instance that requires login (the page you normally open
+for time cards works best). Both are stored per machine; `TC_INSTANCE` / `TC_PORTAL_PAGE`
+environment variables override them. Then:
 
 ```sh
 tc login              # complete SSO in the browser window
@@ -135,6 +138,7 @@ offers to open the login window and then re-runs your command.
 
 | Message | Fix |
 |---|---|
+| `No ServiceNow instance set` / login opens the wrong site | Run `tc init --instance <name> --portal-page <page>` on that machine (each machine has its own config). |
 | `Not logged in to ServiceNow. Run tc login.` | SSO session expired: `tc login` (or answer **y** when `tc` offers). |
 | `ServiceNow moved the card to week …` | Set `week_starts_on` to the day it names; the misplaced card was already deleted. |
 | `'admin' matches several cards (…)` | Use a more specific word from the list, e.g. `general` instead of `admin`. |

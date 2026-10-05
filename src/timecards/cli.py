@@ -99,15 +99,28 @@ def _plan_and_save(sn: ServiceNow, wk: date, yes: bool, dry_run: bool, **plan) -
 def login():
     """Open a browser to complete SSO once; the session is reused afterwards."""
     cfg = config.load()
+    console.print(f"Opening {cfg.instance}{cfg.portal_page}")
     console.print("Complete the SSO login in the browser window (5 min timeout)...")
     s = auth.harvest(cfg, interactive=True)
     console.print(f"[green]Logged in as {s['user']['name']} ({s['user']['user_name']}).[/]")
 
 
 @app.command()
-def init(from_last: bool = typer.Option(False, "--from-last", help="Generate default rows from your latest week.")):
-    """Create the config file (~/.config/timecards/config.toml)."""
+def init(
+    from_last: bool = typer.Option(False, "--from-last", help="Generate default rows from your latest week."),
+    instance: str = typer.Option(None, "--instance", "-i", help="Instance name or URL, e.g. acme or https://acme.service-now.com."),
+    portal_page: str = typer.Option(None, "--portal-page", help="Page that requires login, e.g. /sp or /esc."),
+):
+    """Create the config file (~/.config/timecards/config.toml) and set your instance."""
     created = config.ensure_config()
+    values = {}
+    if instance:
+        values["instance"] = config.normalize_instance(instance)
+    if portal_page:
+        values["portal_page"] = portal_page if portal_page.startswith("/") else "/" + portal_page
+    if values:
+        config.set_values(**values)
+        console.print(", ".join(f"{k} = {v}" for k, v in values.items()))
     if from_last:
         cfg = config.load()
         recent = ServiceNow(cfg).recent_cards()

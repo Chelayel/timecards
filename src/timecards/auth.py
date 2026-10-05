@@ -13,7 +13,7 @@ import os
 import time
 from urllib.parse import urlparse
 
-from .config import PROFILE_DIR, SESSION_FILE, Config
+from .config import CONFIG_FILE, PLACEHOLDER_HOST, PROFILE_DIR, SESSION_FILE, Config
 
 
 class NeedLogin(Exception):
@@ -54,6 +54,9 @@ def harvest(cfg: Config, interactive: bool, timeout_s: int | None = None) -> dic
     """Open the portal, wait until authenticated, and save token + cookies."""
     from playwright.sync_api import sync_playwright
 
+    if not cfg.instance or PLACEHOLDER_HOST in cfg.instance:
+        raise ValueError(f"No ServiceNow instance set. Run `tc init --instance <name or URL>` "
+                         f"(e.g. tc init --instance acme) or edit {CONFIG_FILE}.")
     timeout_s = timeout_s or (300 if interactive else 30)
     host = urlparse(cfg.instance).hostname
     result = None

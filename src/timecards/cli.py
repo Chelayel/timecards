@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from datetime import date, timedelta
 
 import typer
@@ -132,6 +133,17 @@ def init(
         values["instance"] = config.normalize_instance(instance)
     if portal_page:
         values["portal_page"] = portal_page if portal_page.startswith("/") else "/" + portal_page
+    current = config.current_values()
+    if config.PLACEHOLDER_HOST not in current.get("instance", config.PLACEHOLDER_HOST):
+        # The instance is already set: re-running the setup command (e.g. after updating `tc`)
+        # must not swap it for another one by accident.
+        for key, value in list(values.items()):
+            old = current.get(key, "")
+            same = config.normalize_instance(old) == value if key == "instance" else old == value
+            if old and not same and not (sys.stdin.isatty() and typer.confirm(
+                    f"{key} is already {old}. Replace it with {value}?", default=False)):
+                console.print(f"Kept {key} = {old} (edit {config.CONFIG_FILE} to change it).")
+                del values[key]
     if values:
         config.set_values(**values)
         console.print(", ".join(f"{k} = {v}" for k, v in values.items()))
@@ -317,8 +329,6 @@ def ui(week: str = WeekOpt, offset: int = OffsetOpt):
 
 def main():
     """Entry point: short errors instead of tracebacks, and offer to log in when the session expired."""
-    import sys
-
     try:
         app()
     except auth.NeedLogin as e:

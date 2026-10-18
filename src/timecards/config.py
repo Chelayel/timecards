@@ -172,6 +172,11 @@ def normalize_instance(url: str) -> str:
     return url
 
 
+def current_values() -> dict:
+    """Top-level values as written in config.toml (no env overrides, no normalizing)."""
+    return tomllib.loads(CONFIG_FILE.read_text()) if CONFIG_FILE.exists() else {}
+
+
 def set_values(**values: str) -> None:
     """Replace top-level `key = "..."` lines in config.toml (adding missing keys at the top)."""
     ensure_config()

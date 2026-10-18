@@ -118,9 +118,10 @@ fields = { u_subcategory = "pto" }
 hours = 8
 ```
 
-- **What fill starts from:** with `fill_from = "last_week"`, the most recent week (up to 8 back)
-  that has cards and no PTO is copied — a PTO week has other cards zeroed, so it's skipped.
-  If there is none, `[[rows]]` are used. The preview says which: `Based on: copied from week of …`.
+- **What fill starts from:** with `fill_from = "last_week"`, the most recent complete week
+  (up to 26 back) is copied: no PTO (a PTO week has other cards zeroed), a card of each kind in
+  `[[rows]]` (same category and fields; the task may differ) and at least the `[[rows]]` total
+  hours. Empty, half-filled or wrongly filled weeks are skipped. If there is none, `[[rows]]` are used. The preview says which: `Based on: copied from week of …`.
 - **A week that already has cards:** `fill` only adds what's missing, and warns about editable
   cards that aren't in the source (e.g. from an earlier fill with other defaults).
   `tc fill --replace` makes the week match the source: hours reset, other editable cards
@@ -168,6 +169,9 @@ uv run pytest   # tests run against an in-memory fake of the time_card table
 cd timecards && git pull
 uv tool install --editable . --force   # refresh the `tc` command (needed when entry points change)
 ```
+
+Updating never touches `~/.config/timecards/`. If you re-run `tc init --instance …` once an
+instance is set, `tc` asks before replacing it (and keeps it when not run in a terminal).
 
 ## License
 

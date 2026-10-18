@@ -11,6 +11,9 @@ import httpx
 from . import auth
 from .config import DAYS, Config, DefaultRow, day_name
 
+LOOKBACK_WEEKS = 26  # how far back `fill` looks for a complete week to copy
+
+
 class ApiError(Exception):
     pass
 
@@ -232,19 +235,28 @@ class ServiceNow:
     def source_cards(self, week: date, use_defaults: bool = False) -> tuple[list[Card], str]:
         """Unsaved cards to base `week` on, and a description of where they came from.
 
-        fill_from = "last_week": copy the most recent earlier week that has cards and no PTO
-        (PTO zeroes other cards, so such a week isn't a typical one). Falls back to config rows.
+        fill_from = "last_week": copy the most recent earlier week (up to LOOKBACK_WEEKS back) that
+        is complete: no PTO (PTO zeroes other cards, so such a week isn't a typical one), a card for
+        each kind of [[rows]] card (category + fields; the task may differ), and at least the [[rows]]
+        total hours. Empty, half-filled or wrongly filled weeks are skipped. Falls back to config rows.
         """
         if not use_defaults and self.cfg.fill_from == "last_week":
             q = (f"user={self.me['sys_id']}^week_starts_on<{week.isoformat()}"
-                 f"^week_starts_on>={(week - timedelta(weeks=8)).isoformat()}^state!=Cancelled^ORDERBYDESCweek_starts_on")
+                 f"^week_starts_on>={(week - timedelta(weeks=LOOKBACK_WEEKS)).isoformat()}"
+                 "^state!=Cancelled^ORDERBYDESCweek_starts_on")
             by_week: dict[str, list[Card]] = {}
-            for rec in self._query_cards(q):
+            for rec in self._query_cards(q, limit=500):
                 by_week.setdefault(_v(rec, "week_starts_on"), []).append(self._to_card(rec))
+            kind = lambda c: (c.category, tuple(sorted((k, v) for k, v in c.fields.items() if v)))
+            rows = [r for r in self.cfg.rows if any(r.hours.values())]
+            need_kinds = {kind(r) for r in rows}
+            need_hours = sum(h for r in rows for h in r.hours.values())
             for wk in sorted(by_week, reverse=True):
                 cards = [c for c in by_week[wk] if c.total]
                 if not cards or any(self.is_pto(c) for c in cards):
                     continue
+                if not need_kinds <= {kind(c) for c in cards} or sum(c.total for c in cards) < need_hours:
+                    continue  # not filled (or filled with something else): look further back
                 merged: dict[tuple, Card] = {}
                 for c in cards:  # identical cards in one week: keep the hours that were logged
                     if c.key in merged:
@@ -256,7 +268,7 @@ class ServiceNow:
                                              dirty=True)
                 return list(merged.values()), f"copied from week of {wk}"
         if not self.cfg.rows:
-            raise ApiError("No earlier week to copy and no [[rows]] in config.toml.")
+            raise ApiError("No complete earlier week to copy and no [[rows]] in config.toml.")
         return self.default_cards(), "from config defaults"
 
     def pto_card(self) -> Card:

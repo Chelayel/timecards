@@ -37,10 +37,28 @@ def test_skips_weeks_with_pto(sn):
 
 def test_falls_back_to_defaults(sn):
     sn.db.clear()
-    sn.add("2026-07-06", "admin", {"monday": 3}, u_subcategory="general")  # older than 8 weeks
-    sn.add("2026-07-06", "task_work", {"monday": 1}, task=TASK)
+    sn.add("2026-03-02", "admin", {d: 1 for d in WEEKDAYS}, u_subcategory="general")  # beyond the lookback
+    sn.add("2026-03-02", "task_work", {d: 7 for d in WEEKDAYS}, task=TASK)
     assert "source   from config defaults" in fill(sn)
     assert week_hours(sn, WEEK)["general"]["monday"] == 1
+
+
+def test_skips_weeks_that_are_not_filled(sn):
+    sn.db.clear()
+    sn.add(PREV, "task_work", {"monday": 7, "tuesday": 7}, task=TASK)  # half filled
+    sn.add(PREV, "admin", {"monday": 1}, u_subcategory="general")
+    sn.add("2026-09-14", "admin", {d: 8 for d in WEEKDAYS})  # filled with something else
+    sn.add("2026-06-08", "task_work", {d: 7 for d in WEEKDAYS}, task=TASK)  # last complete week
+    sn.add("2026-06-08", "admin", {"monday": 2, **{d: 1 for d in WEEKDAYS[1:]}}, u_subcategory="general")
+    assert "source   copied from week of 2026-06-08" in fill(sn)
+    assert week_hours(sn, WEEK)["general"]["monday"] == 2
+
+
+def test_no_complete_week_uses_defaults(sn):  # the fixture's week has only task_work: skipped too
+    sn.add(PREV, "admin", {d: 8 for d in WEEKDAYS})
+    assert "source   from config defaults" in fill(sn)
+    h = week_hours(sn, WEEK)
+    assert h["task_work"]["monday"] == 7 and h["general"]["friday"] == 1
 
 
 def test_defaults_flag(sn):

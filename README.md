@@ -3,8 +3,10 @@
 Fill, review and submit ServiceNow time cards from the terminal instead of the portal.
 
 - **SSO-friendly:** `tc login` opens a real browser once; the session is reused for API calls.
-- **Copies your last week:** `tc fill` repeats your most recent week without PTO (tasks, categories,
-  hours), skipping cards that already exist. Config `[[rows]]` are the fallback (or `--defaults`).
+- **Copies your last week:** `tc fill` repeats your most recent complete week without PTO (tasks,
+  categories, hours) and fills cards that are still empty. Config `[[rows]]` are the fallback.
+- **Sets itself up:** `tc init --from-last` reads your history and writes your usual cards and
+  your PTO card, including custom fields such as a subcategory.
 - **Preview first:** every write shows the week (new cells green, changes `old→new`) and asks.
 - **PTO:** full or partial days; the PTO hours come off your other cards.
 - **One-off changes:** `tc fill mon pto 4, tue general +1` tweaks days without editing config.
@@ -38,9 +40,23 @@ environment variables override them. Then:
 
 ```sh
 tc login              # complete SSO in the browser window
-tc discover           # your recent cards, categories and time_card field names
-tc init --from-last   # default rows (and week start) from your latest week
+tc discover           # your recent cards, and the setup tc suggests from them
+tc init --from-last   # write that setup to config.toml
 ```
+
+`tc init --from-last` works out from your recent cards:
+
+- **Which fields tell cards apart.** If two cards of the same category in one week differ only in a
+  custom field (e.g. *Admin/Misc* = General vs. Out of Office), that field (`u_subcategory`) is
+  added to each row as `fields = { u_subcategory = "general" }`. Without it, `tc` can't tell those
+  cards apart.
+- **Your usual week** (`[[rows]]`): the most recent week without PTO that has your usual hours
+  every day (e.g. 7 on the task + 1 general) and all those fields set.
+- **Your PTO card** (`[pto]`): the card whose field reads like time off (PTO, Out of Office,
+  vacation, holiday, leave). A `[pto]` section you already set up is kept.
+- **Your week start** (`week_starts_on`).
+
+Check the result with `tc fill -n`. To redo it later (e.g. a new task), run it again.
 
 Session data and config live in `~/.config/timecards/` (session file is `chmod 600`).
 
@@ -89,8 +105,10 @@ tc fill wed pto            # full PTO day
 
 ## Configuration
 
-`~/.config/timecards/config.toml` — see the comments `tc init` writes. An example for an
-instance with Monday weeks, a custom `u_subcategory` field, and PTO logged as admin time:
+`~/.config/timecards/config.toml`: see the comments `tc init` writes. You rarely need to edit it
+by hand. `tc init --from-last` writes the rows and PTO card, and `tc discover` prints what it
+would write. An example for an instance with Monday weeks, a custom `u_subcategory` field, and
+PTO logged as admin time:
 
 ```toml
 instance = "https://example.service-now.com"
@@ -121,10 +139,12 @@ hours = 8
 - **What fill starts from:** with `fill_from = "last_week"`, the most recent complete week
   (up to 26 back) is copied: no PTO (a PTO week has other cards zeroed), a card of each kind in
   `[[rows]]` (same category and fields; the task may differ) and at least the `[[rows]]` total
-  hours. Empty, half-filled or wrongly filled weeks are skipped. If there is none, `[[rows]]` are used. The preview says which: `Based on: copied from week of …`.
-- **A week that already has cards:** `fill` only adds what's missing and fills cards that are
-  still empty (some instances create them each week; PTO already saved there is kept), and warns about editable
-  cards that aren't in the source (e.g. from an earlier fill with other defaults).
+  hours. Empty, half-filled or wrongly filled weeks are skipped. If there is none, `[[rows]]` are
+  used. The preview says which: `Based on: copied from week of …`.
+- **A week that already has cards:** `fill` adds missing cards and fills cards that are still
+  empty (some instances create a week's cards up front). PTO already saved in the week is kept.
+  It doesn't change cards that have hours; it warns about editable cards that aren't in the
+  source (e.g. from an earlier fill with other defaults).
   `tc fill --replace` makes the week match the source: hours reset, other editable cards
   deleted (shown in red in the preview). Submitted/frozen cards are never touched.
 - **Tasks** can be a number, the title ServiceNow displays, or a sys_id (`task_id`). Titles are
@@ -155,6 +175,8 @@ offers to open the login window and then re-runs your command.
 | `'admin' matches several cards (…)` | Use a more specific word from the list, e.g. `general` instead of `admin`. |
 | `Task '…' not found` | Log time on it once in the portal, or put its sys_id in `task_id`. |
 | `'Submit for Approval' isn't available` | Set `submit_action` to the label in your instance's time card list actions. |
+| `PTO isn't set up` | Run `tc init --from-last`, or add the `[pto]` section it shows. |
+| Several identical `admin` rows in `tc discover` / wrong card filled | The cards differ in a custom field: run `tc init --from-last` so the rows get `fields = { … }`. |
 | `Already in this week but not in the source: …` | Check the preview; `tc fill --replace` removes those cards. |
 | `… is listed twice …` | Remove the duplicate `[[rows]]` block. |
 

@@ -11,7 +11,7 @@ from rich.markup import escape
 from rich.table import Table
 
 from . import api, auth, config, overrides
-from .api import ApiError, ServiceNow
+from .api import ApiError, ServiceNow, _v
 
 app = typer.Typer(no_args_is_help=True, help="ServiceNow time cards without the portal.")
 console = Console()
@@ -150,32 +150,28 @@ def init(
         console.print(", ".join(f"{k} = {v}" for k, v in values.items()))
     if from_last:
         cfg = config.load()
-        sn = ServiceNow(cfg)
-        recent = sn.recent_cards()
-        if not recent:
-            console.print("[yellow]No previous time cards found.[/]")
+        rows, pto_row, latest, _ = ServiceNow(cfg).suggest_setup()
+        if not rows:
+            console.print("[yellow]No complete earlier week found.[/]")
             raise typer.Exit(1)
-        latest = recent[0][0]
-        rows = [config.DefaultRow(task=c.task_label, task_id=c.task_id, category=c.category, fields=c.fields,
-                                  hours={d: c.hours[d] for d in config.DAYS if c.hours[d]})
-                for w, c, _ in recent if w == latest and c.total and not sn.is_pto(c)]
-        seen = set()  # a week with duplicate cards must not produce duplicate defaults
-        rows = [r for r in rows if (k := (r.task_id, r.category, tuple(sorted(r.fields.items())))) not in seen
-                and not seen.add(k)]
         lines = config.CONFIG_FILE.read_text().splitlines()
         first_row = next((i for i, l in enumerate(lines) if l.startswith("[[rows]]")), len(lines))
         start = date.fromisoformat(latest).strftime("%A").lower()  # the instance's real week start
         head = [f'week_starts_on = "{start}"' if l.startswith("week_starts_on") else l
                 for l in lines[:first_row] if not l.startswith("# Tip:")]
         pto_at = next((i for i, l in enumerate(lines) if l.startswith("[pto]")), None)
-        if pto_at is None:
-            pto = config.PTO_CONFIG.strip("\n")
-        else:  # keep the existing [pto] section with its comment lines
-            while pto_at > 0 and lines[pto_at - 1].startswith("#"):
-                pto_at -= 1
-            pto = "\n".join(lines[pto_at:])
+        if cfg.pto or not pto_row:  # keep a [pto] section that is already set up
+            if pto_at is None:
+                pto = config.PTO_CONFIG.strip("\n")
+            else:  # with its comment lines
+                while pto_at > 0 and lines[pto_at - 1].startswith("#"):
+                    pto_at -= 1
+                pto = "\n".join(lines[pto_at:])
+        else:
+            pto = config.render_pto(pto_row)
         config.CONFIG_FILE.write_text("\n".join(head).rstrip() + "\n\n" + config.render_rows(rows) + "\n" + pto + "\n")
-        console.print(f"Wrote {len(rows)} default row(s) from week of {latest}.")
+        console.print(f"Wrote {len(rows)} default row(s) from week of {latest}"
+                      + ("" if cfg.pto or not pto_row else " and the \\[pto] card") + ".")
     elif not created:
         console.print("Config already exists.")
     console.print(f"Config: {config.CONFIG_FILE}")
@@ -307,16 +303,21 @@ def discover(limit: int = 20):
     sn = ServiceNow(cfg)
     console.print(f"User: {sn.me['name']} ({sn.me['user_name']})")
     recent = sn.recent_cards(limit)
+    rows, pto_row, week, fields = sn.suggest_setup()
     t = Table()
     for col in ("Week", "Task", "Category", "Total", "State"):
         t.add_column(col)
-    for w, c, _ in recent:
-        t.add_row(w, c.task_label or "-", c.category, f"{c.total:g}", c.state)
+    for w, c, rec in recent:
+        cat = "/".join([c.category, *(_v(rec, f) for f in fields if _v(rec, f))])
+        t.add_row(w, c.task_label or "-", cat, f"{c.total:g}", c.state)
     console.print(t)
-    cats = sorted({(c.category, c.task_label) for _, c, _ in recent})
-    console.print("Category / task combos:", "; ".join(f"{c} / {t or '-'}" for c, t in cats))
     if recent:
         console.print("Fields on time_card:", ", ".join(sorted(recent[0][2])))
+    if fields:
+        console.print(f"Fields that tell cards apart: {', '.join(fields)}")
+    if rows:
+        console.print(f"\nSuggested setup, from week of {week} (`tc init --from-last` writes it):\n")
+        console.print(escape(config.render_rows(rows) + ("\n" + config.render_pto(pto_row) if pto_row else "")))
 
 
 @app.command()

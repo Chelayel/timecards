@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -11,6 +12,7 @@ import httpx
 from . import auth
 from .config import DAYS, Config, DefaultRow, day_name
 
+PTO_WORDS = re.compile(r"\bpto\b|out of office|vacation|holiday|leave", re.I)
 LOOKBACK_WEEKS = 26  # how far back `fill` looks for a complete week to copy
 
 
@@ -140,6 +142,52 @@ class ServiceNow:
     def recent_cards(self, limit: int = 50) -> list[tuple[str, Card, dict]]:
         q = f"user={self.me['sys_id']}^ORDERBYDESCweek_starts_on"
         return [(_v(r, "week_starts_on"), self._to_card(r), r) for r in self._query_cards(q, limit)]
+
+    def suggest_setup(self, limit: int = 200) -> tuple[list[DefaultRow], DefaultRow | None, str, list[str]]:
+        """Default rows, PTO card, source week and card-telling fields, worked out from your history.
+
+        Fields: custom (u_*) fields with different values on two cards of the same category in
+        one week (e.g. u_subcategory general vs pto). PTO: the card kind whose field label looks
+        like time off. Rows: the most recent week without PTO, with all such fields set, that has your
+        usual hours every day (else the most recent such week at all).
+        """
+        recent = self._query_cards(f"user={self.me['sys_id']}^ORDERBYDESCweek_starts_on", limit)
+        groups: dict[tuple, list[dict]] = {}
+        for r in recent:
+            groups.setdefault((_v(r, "week_starts_on"), _v(r, "category")), []).append(r)
+        fields = sorted({f for rs in groups.values() for r in rs for f in r if f.startswith("u_")
+                         and len({_v(x, f) for x in rs if _v(x, f)}) > 1})
+        kind = lambda r: (_v(r, "category"), tuple((f, _v(r, f)) for f in fields if _v(r, f)))
+        pto = next((r for r in recent if any(PTO_WORDS.search(_v(r, f, display=True)) for f in fields)), None)
+        is_pto = lambda r: pto is not None and kind(r) == kind(pto)
+        # Categories that use a field must always have it set, or the week was filled half-way.
+        needs = {(_v(r, "category"), f) for r in recent for f in fields if _v(r, f)}
+
+        def total(r):
+            return sum(float(_v(r, d) or 0) for d in DAYS)
+
+        weeks: dict[str, list[dict]] = {}
+        for r in recent:
+            weeks.setdefault(_v(r, "week_starts_on"), []).append(r)
+        good = {wk: sum(total(r) for r in rs) for wk, rs in weeks.items()
+                if not any(is_pto(r) and total(r) for r in rs)
+                and all(_v(r, f) for r in rs if total(r) for c, f in needs if c == _v(r, "category"))}
+        good = {wk: t for wk, t in good.items() if t}
+        # A plain week: your usual hours on each of your usual number of days (no overtime, no gaps).
+        per_day = {wk: [h for d in DAYS if (h := sum(float(_v(r, d) or 0) for r in weeks[wk]))] for wk in good}
+        day_h = Counter(h for hs in per_day.values() for h in hs).most_common(1)
+        n_days = Counter(len(hs) for hs in per_day.values()).most_common(1)
+        plain = [wk for wk, hs in per_day.items() if len(hs) == n_days[0][0] and set(hs) == {day_h[0][0]}]
+        week = max(plain or good, default="")
+        rows: dict[tuple, DefaultRow] = {}
+        for r in weeks.get(week, []):
+            if total(r) and (k := (_v(r, "task"), *kind(r))) not in rows:
+                rows[k] = DefaultRow(task=_v(r, "task", display=True), task_id=_v(r, "task"), category=_v(r, "category"),
+                                     fields=dict(kind(r)[1]), hours={d: float(_v(r, d)) for d in DAYS if float(_v(r, d) or 0)})
+        pto_row = None if pto is None else DefaultRow(task=_v(pto, "task", display=True), task_id=_v(pto, "task"),
+                                                      category=_v(pto, "category"), fields=dict(kind(pto)[1]),
+                                                      hours={"day": 8.0})
+        return list(rows.values()), pto_row, week, fields
 
     def find_task(self, ref: str) -> tuple[str, str]:
         """Resolve a task number, title, or sys_id to (sys_id, label).

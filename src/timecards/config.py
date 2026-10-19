@@ -201,6 +201,15 @@ def render_rows(rows: list[DefaultRow]) -> str:
     return "\n".join(out)
 
 
+def render_pto(row: DefaultRow) -> str:
+    """TOML text for the [pto] section, with its comment."""
+    fields = ", ".join(f'{k} = "{v}"' for k, v in row.fields.items() if v)
+    task_id = f'task_id = "{row.task_id}"\n' if row.task_id else ""
+    return (PTO_CONFIG.strip("\n").split("\n[pto]")[0] + f'\n[pto]\ntask = "{row.task}"\n{task_id}'
+            f'category = "{row.category}"\n' + (f"fields = {{ {fields} }}\n" if fields else "")
+            + f"hours = {row.hours['day']:g}\n")
+
+
 # -- PTO dates (pto.txt: "YYYY-MM-DD" for a full day, "YYYY-MM-DD 4" for 4 hours) ------
 
 PtoDates = dict[date, float | None]  # None = full day

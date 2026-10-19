@@ -165,3 +165,23 @@ def test_replace_reuses_existing_pto_card(sn):
     assert pto in sn.db  # same card, hours reset to the new PTO days only
     h = week_hours(sn, WEEK)["pto"]
     assert (h["monday"], h["tuesday"]) == (0, 8)
+
+
+def test_suggest_setup_finds_fields_pto_and_a_complete_week(sn):
+    sn.db.clear()
+    for wk in ("2026-09-07", "2026-09-14"):
+        _week_of(sn, wk, general={d: 1 for d in WEEKDAYS})
+        sn.add(wk, "admin", {}, u_subcategory="pto", u_month="Sep")
+    _week_of(sn, "2026-09-21", general={"monday": 1})  # short week
+    sn.add("2026-09-28", "task_work", {d: 7 for d in WEEKDAYS}, task=TASK)
+    sn.add("2026-09-28", "admin", {d: 1 for d in WEEKDAYS})  # subcategory missing: half-filled
+    rows, pto, week, fields = sn.suggest_setup()
+    assert fields == ["u_subcategory"] and week == "2026-09-14"
+    assert pto.category == "admin" and pto.fields == {"u_subcategory": "pto"}
+    assert {(r.category, tuple(r.fields.values())) for r in rows} == {("task_work", ()), ("admin", ("general",))}
+    assert "u_subcategory = \"pto\"" in config.render_pto(pto)
+
+
+def _week_of(sn, wk, general):
+    sn.add(wk, "task_work", {d: 7 for d in WEEKDAYS}, task=TASK, u_month="Sep")
+    sn.add(wk, "admin", general, u_subcategory="general", u_month="Sep")

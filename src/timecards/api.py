@@ -14,6 +14,11 @@ from .config import DAYS, Config, DefaultRow, day_name
 LOOKBACK_WEEKS = 26  # how far back `fill` looks for a complete week to copy
 
 
+PTO_HELP = ("PTO isn't set up. Add the card your PTO goes on to ~/.config/timecards/config.toml, e.g.\n"
+            '[pto]\ncategory = "admin"\nfields = { u_subcategory = "pto" }\nhours = 8\n'
+            "(`tc discover` shows the categories you use.)")
+
+
 class ApiError(Exception):
     pass
 
@@ -274,7 +279,7 @@ class ServiceNow:
     def pto_card(self) -> Card:
         """Unsaved, empty card for PTO (from the [pto] config section)."""
         if not self.cfg.pto:
-            raise ApiError("Set the [pto] category/task in config.toml (see `tc discover`).")
+            raise ApiError(PTO_HELP)
         task_id, label = self._resolve(self.cfg.pto)
         return Card(sys_id=None, task_id=task_id, task_label=label, category=self.cfg.pto.category,
                     fields=dict(self.cfg.pto.fields), dirty=True)

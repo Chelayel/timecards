@@ -7,9 +7,10 @@ from datetime import date, timedelta
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
-from . import auth, config, overrides
+from . import api, auth, config, overrides
 from .api import ApiError, ServiceNow
 
 app = typer.Typer(no_args_is_help=True, help="ServiceNow time cards without the portal.")
@@ -212,7 +213,7 @@ def fill(
     try:
         changes = overrides.parse(ctx.args)
     except overrides.OverrideError as e:
-        console.print(f"[red]{e}[/]")
+        console.print(f"[red]{escape(str(e))}[/]")
         raise typer.Exit(2)
     cfg = config.load()
     sn = ServiceNow(cfg)
@@ -224,7 +225,7 @@ def fill(
         _plan_and_save(sn, wk, yes, dry_run, overwrite=overwrite, pto_dates=pto_dates, changes=changes,
                        use_defaults=defaults, replace=replace)
     except ApiError as e:
-        console.print(f"[red]{e}[/]")
+        console.print(f"[red]{escape(str(e))}[/]")
         raise typer.Exit(1)
     if submit and not dry_run and (yes or typer.confirm("Submit this week?")):
         console.print(sn.submit_week(wk))
@@ -250,7 +251,7 @@ def pto_cmd(
         console.print(f"Removed {len(new)} day(s). Run `tc fill --overwrite -w <date>` to restore default hours.")
         return
     if not cfg.pto:
-        console.print("[red]Set the [pto] category/task in config.toml first (see `tc discover`).[/]")
+        console.print(f"[red]{escape(api.PTO_HELP)}[/]")
         raise typer.Exit(1)
     config.save_pto(saved | new)
     console.print("PTO: " + ", ".join(config.fmt_pto(d, h) for d, h in new.items()))
@@ -333,10 +334,10 @@ def main():
         app()
     except auth.NeedLogin as e:
         if not (sys.stdin.isatty() and typer.confirm(f"{e} Log in now?", default=True)):
-            console.print(f"[red]{e}[/]")
+            console.print(f"[red]{escape(str(e))}[/]")
             raise SystemExit(1)
         login()
         app()  # run the original command again
     except (ApiError, ValueError) as e:
-        console.print(f"[red]{e}[/]")
+        console.print(f"[red]{escape(str(e))}[/]")
         raise SystemExit(1)

@@ -137,6 +137,18 @@ def test_earlier_wrong_fill_is_reported_then_replaced(sn):
     assert set(h) == {"task_work", "general"} and h["task_work"]["monday"] == 7
 
 
+def test_fills_empty_cards_the_instance_created(sn):
+    _prev_week(sn)
+    work = sn.add("2026-09-28", "task_work", {}, task=TASK, state="Active")
+    sn.add("2026-09-28", "admin", {}, state="Active", u_subcategory="general")
+    sn.add("2026-09-28", "admin", {"tuesday": 8}, state="Active", u_subcategory="pto")
+    fill(sn, changes=overrides.parse(["wed pto"]))
+    assert len(sn.week_cards(WEEK)) == 3 and work in sn.db
+    h = week_hours(sn, WEEK)
+    assert h["task_work"]["monday"] == 7 and h["general"]["friday"] == 1
+    assert h["task_work"]["tuesday"] == h["task_work"]["wednesday"] == 0 and h["pto"]["wednesday"] == 8
+
+
 def test_replace_resets_hours_and_keeps_frozen(sn):
     _prev_week(sn)
     sn.add("2026-09-28", "task_work", {d: 14 for d in WEEKDAYS}, task=TASK, state="Active")

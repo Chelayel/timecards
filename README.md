@@ -122,7 +122,8 @@ hours = 8
   (up to 26 back) is copied: no PTO (a PTO week has other cards zeroed), a card of each kind in
   `[[rows]]` (same category and fields; the task may differ) and at least the `[[rows]]` total
   hours. Empty, half-filled or wrongly filled weeks are skipped. If there is none, `[[rows]]` are used. The preview says which: `Based on: copied from week of …`.
-- **A week that already has cards:** `fill` only adds what's missing, and warns about editable
+- **A week that already has cards:** `fill` only adds what's missing and fills cards that are
+  still empty (some instances create them each week; PTO already saved there is kept), and warns about editable
   cards that aren't in the source (e.g. from an earlier fill with other defaults).
   `tc fill --replace` makes the week match the source: hours reset, other editable cards
   deleted (shown in red in the preview). Submitted/frozen cards are never touched.

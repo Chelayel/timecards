@@ -347,7 +347,8 @@ class ServiceNow:
                   pto_dates: dict[date, float | None] | None = None,
                   changes: list | None = None, use_defaults: bool = False,
                   replace: bool = False) -> tuple[list[Card], list[str]]:
-        """The week's cards with missing source cards added, then PTO, then per-day changes. Nothing is saved.
+        """The week's cards with missing source cards added (or empty ones filled), then PTO, then
+        per-day changes. Nothing is saved.
 
         replace: make the week match the source exactly: reset matching cards' hours and delete
         editable cards that aren't in the source (e.g. left over from an earlier wrong fill).
@@ -355,6 +356,7 @@ class ServiceNow:
         overwrite = overwrite or replace
         cards = self.week_cards(week)
         existing = {c.key: c for c in cards}
+        filled: list[Card] = []  # cards that get source hours in this run
         log = []
         defaults, source = self.source_cards(week, use_defaults)
         log.append(f"source   {source}")
@@ -365,9 +367,12 @@ class ServiceNow:
             if cur is None:
                 cards.append(card)
                 existing[key] = card
+                filled.append(card)
                 log.append(f"create   {label}")
-            elif overwrite and cur.editable and cur.sys_id:
-                cur.hours, cur.dirty = card.hours, True
+            elif (overwrite or not cur.total) and cur.editable and cur.sys_id:
+                # Empty cards (e.g. ones the instance creates each week) count as not filled yet.
+                cur.hours, cur.dirty = dict(card.hours), True
+                filled.append(cur)
                 log.append(f"update   {label}")
             elif cur.sys_id:
                 log.append(f"exists   {label} [{cur.state}]")
@@ -381,9 +386,25 @@ class ServiceNow:
                     log.append(f"delete   {c.task_label or '(no task)'} / {c.category}")
                 elif not self.is_pto(c):
                     log.append(f"extra    {'/'.join([c.task_label or c.category, *c.fields.values()])}")
+        self._keep_saved_pto(cards, filled)
         log += self.apply_pto(cards, self.pto_days(week, pto_dates or {}))
         log += self.apply_changes(cards, changes or [], {c.key: c.hours for c in defaults})
         return cards, log
+
+    def _keep_saved_pto(self, cards: list[Card], filled: list[Card]) -> None:
+        """Take PTO hours already saved in the week off the cards being filled (in place).
+
+        A full PTO day zeroes them; a partial one comes off the biggest first, like apply_pto.
+        """
+        pto = next((c for c in cards if c.sys_id and not c.deleted and self.is_pto(c)), None)
+        if not pto or not filled:
+            return
+        for day, h in pto.hours.items():
+            take = sum(c.hours[day] for c in filled) if h >= self.cfg.pto.hours["day"] else h
+            for c in sorted(filled, key=lambda c: -c.hours[day]):
+                cut = min(take, c.hours[day])
+                c.hours[day] -= cut
+                take -= cut
 
     def apply_changes(self, cards: list[Card], changes: list, default_hours: dict[tuple, dict]) -> list[str]:
         """Apply overrides.Override items (in place)."""

@@ -13,6 +13,7 @@ from . import auth
 from .config import DAYS, Config, DefaultRow, day_name
 
 PTO_WORDS = re.compile(r"\bpto\b|out of office|vacation|holiday|leave", re.I)
+FIELDS_HINT = "Run `tc init --from-last` so your rows include it, or set it in the portal."
 LOOKBACK_WEEKS = 26  # how far back `fill` looks for a complete week to copy
 
 
@@ -68,6 +69,8 @@ class ServiceNow:
         self._session = auth.load_session()
         self._http: httpx.Client | None = None
         self._recent: list[tuple[str, Card, dict]] | None = None
+        self._history: list[dict] | None = None
+        self._fields: tuple[list[str], dict[str, dict[str, list[str]]]] | None = None
 
     # -- transport ---------------------------------------------------------
 
@@ -130,7 +133,7 @@ class ServiceNow:
             hours={d: float(_v(rec, d) or 0) for d in DAYS},
             state=_v(rec, "state", display=True),
             time_sheet=_v(rec, "time_sheet"),
-            fields={f: _v(rec, f) for f in self.cfg.extra_fields if _v(rec, f)},
+            fields={f: _v(rec, f) for f in self.read_fields() if _v(rec, f)},
             locked=bool(_v(rec, "state")) and _v(rec, "state") not in self.cfg.editable_states,
             orig={d: float(_v(rec, d) or 0) for d in DAYS},
         )
@@ -143,7 +146,57 @@ class ServiceNow:
         q = f"user={self.me['sys_id']}^ORDERBYDESCweek_starts_on"
         return [(_v(r, "week_starts_on"), self._to_card(r), r) for r in self._query_cards(q, limit)]
 
-    def suggest_setup(self, limit: int = 200) -> tuple[list[DefaultRow], DefaultRow | None, str, list[str]]:
+    def history(self) -> list[dict]:
+        """Your most recent time_card records (raw), newest week first. Cached."""
+        if self._history is None:
+            self._history = self._query_cards(f"user={self.me['sys_id']}^ORDERBYDESCweek_starts_on", 200)
+        return self._history
+
+    def card_fields(self) -> tuple[list[str], dict[str, dict[str, list[str]]]]:
+        """Custom fields that tell cards apart, and the ones each category needs. Cached.
+
+        Fields: custom (u_*) fields with different values on two cards of the same category in one
+        week (e.g. u_subcategory general vs pto), plus the fields used in [[rows]] / [pto].
+        Needed: {category: {field: example labels}} for fields set on most of that category's cards.
+        Writing such a card without the field breaks it on the instance, so check_fields refuses.
+        """
+        if self._fields is None:
+            recent = self.history()
+            groups: dict[tuple, list[dict]] = {}
+            for r in recent:
+                groups.setdefault((_v(r, "week_starts_on"), _v(r, "category")), []).append(r)
+            used = {k for r in [*self.cfg.rows, *([self.cfg.pto] if self.cfg.pto else [])] for k in r.fields}
+            fields = sorted(used | {f for rs in groups.values() for r in rs for f in r if f.startswith("u_")
+                                    and len({_v(x, f) for x in rs if _v(x, f)}) > 1})
+            needs: dict[str, dict[str, list[str]]] = {}
+            by_cat: dict[str, list[dict]] = {}
+            for r in recent:
+                by_cat.setdefault(_v(r, "category"), []).append(r)
+            for cat, rs in by_cat.items():
+                for f in fields:
+                    have = [r for r in rs if _v(r, f)]
+                    if len(have) * 2 > len(rs):
+                        needs.setdefault(cat, {})[f] = sorted({_v(r, f, display=True) or _v(r, f) for r in have})
+            self._fields = fields, needs
+        return self._fields
+
+    def read_fields(self) -> list[str]:
+        """Custom fields to read on every card: the config's extra_fields and the detected ones."""
+        return list(dict.fromkeys([*self.cfg.extra_fields, *self.card_fields()[0]]))
+
+    def check_fields(self, cards: list[Card], hint: str) -> None:
+        """Refuse cards that lack a field their category needs (see card_fields)."""
+        needs = self.card_fields()[1]
+        bad = [f"{c.task_label or c.category} has no {f} ({', '.join(labels)})"
+               for c in cards for f, labels in needs.get(c.category, {}).items() if not c.fields.get(f)]
+        if bad:
+            raise ApiError("; ".join(bad) + f". ServiceNow needs it. {hint}")
+
+    @staticmethod
+    def _to_write(cards: list[Card]) -> list[Card]:
+        return [c for c in cards if not c.deleted and ((c.sys_id is None and c.total) or (c.sys_id and c.dirty))]
+
+    def suggest_setup(self) -> tuple[list[DefaultRow], DefaultRow | None, str, list[str]]:
         """Default rows, PTO card, source week and card-telling fields, worked out from your history.
 
         Fields: custom (u_*) fields with different values on two cards of the same category in
@@ -151,17 +204,13 @@ class ServiceNow:
         like time off. Rows: the most recent week without PTO, with all such fields set, that has your
         usual hours every day (else the most recent such week at all).
         """
-        recent = self._query_cards(f"user={self.me['sys_id']}^ORDERBYDESCweek_starts_on", limit)
-        groups: dict[tuple, list[dict]] = {}
-        for r in recent:
-            groups.setdefault((_v(r, "week_starts_on"), _v(r, "category")), []).append(r)
-        fields = sorted({f for rs in groups.values() for r in rs for f in r if f.startswith("u_")
-                         and len({_v(x, f) for x in rs if _v(x, f)}) > 1})
+        recent = self.history()
+        fields, needs_by_cat = self.card_fields()
         kind = lambda r: (_v(r, "category"), tuple((f, _v(r, f)) for f in fields if _v(r, f)))
         pto = next((r for r in recent if any(PTO_WORDS.search(_v(r, f, display=True)) for f in fields)), None)
         is_pto = lambda r: pto is not None and kind(r) == kind(pto)
-        # Categories that use a field must always have it set, or the week was filled half-way.
-        needs = {(_v(r, "category"), f) for r in recent for f in fields if _v(r, f)}
+        # Cards without a field their category needs mean the week was filled half-way.
+        needs = {(c, f) for c, fs in needs_by_cat.items() for f in fs}
 
         def total(r):
             return sum(float(_v(r, d) or 0) for d in DAYS)
@@ -260,6 +309,7 @@ class ServiceNow:
         cards = [c for c in self.week_cards(week) if c.editable and c.sys_id]
         if not cards:
             return "Nothing editable to submit."
+        self.check_fields(cards, "Set it in the portal (or `tc fill --replace`), then submit.")
         states = "^OR".join(f"state={s}" for s in self.cfg.editable_states)
         query = f"user={self.me['sys_id']}^week_starts_on={week.isoformat()}^{states}"
         msgs = ui.run_list_action(self.cfg, "time_card", query, {c.sys_id for c in cards}, self.cfg.submit_action,
@@ -291,7 +341,8 @@ class ServiceNow:
         fill_from = "last_week": copy the most recent earlier week (up to LOOKBACK_WEEKS back) that
         is complete: no PTO (PTO zeroes other cards, so such a week isn't a typical one), a card for
         each kind of [[rows]] card (category + fields; the task may differ), and at least the [[rows]]
-        total hours. Empty, half-filled or wrongly filled weeks are skipped. Falls back to config rows.
+        total hours, with every card's needed fields set (see card_fields). Empty, half-filled or
+        wrongly filled weeks are skipped. Falls back to config rows.
         """
         if not use_defaults and self.cfg.fill_from == "last_week":
             q = (f"user={self.me['sys_id']}^week_starts_on<{week.isoformat()}"
@@ -300,16 +351,18 @@ class ServiceNow:
             by_week: dict[str, list[Card]] = {}
             for rec in self._query_cards(q, limit=500):
                 by_week.setdefault(_v(rec, "week_starts_on"), []).append(self._to_card(rec))
-            kind = lambda c: (c.category, tuple(sorted((k, v) for k, v in c.fields.items() if v)))
             rows = [r for r in self.cfg.rows if any(r.hours.values())]
-            need_kinds = {kind(r) for r in rows}
             need_hours = sum(h for r in rows for h in r.hours.values())
+            # A row matches a card of its category that has at least the row's fields.
+            has = lambda cards, r: any(c.category == r.category and r.fields.items() <= c.fields.items() for c in cards)
             for wk in sorted(by_week, reverse=True):
                 cards = [c for c in by_week[wk] if c.total]
                 if not cards or any(self.is_pto(c) for c in cards):
                     continue
-                if not need_kinds <= {kind(c) for c in cards} or sum(c.total for c in cards) < need_hours:
+                if not all(has(cards, r) for r in rows) or sum(c.total for c in cards) < need_hours:
                     continue  # not filled (or filled with something else): look further back
+                if any(not c.fields.get(f) for c in cards for f in self.card_fields()[1].get(c.category, {})):
+                    continue  # a card lacks a field it needs (e.g. admin without subcategory)
                 merged: dict[tuple, Card] = {}
                 for c in cards:  # identical cards in one week: keep the hours that were logged
                     if c.key in merged:
@@ -383,6 +436,7 @@ class ServiceNow:
 
     def save_cards(self, week: date, cards: list[Card]) -> None:
         """Push creates / updates / deletes for a week's cards."""
+        self.check_fields(self._to_write(cards), FIELDS_HINT)
         for c in cards:
             if c.deleted and c.sys_id:
                 self.delete_card(c.sys_id)
@@ -437,6 +491,7 @@ class ServiceNow:
         self._keep_saved_pto(cards, filled)
         log += self.apply_pto(cards, self.pto_days(week, pto_dates or {}))
         log += self.apply_changes(cards, changes or [], {c.key: c.hours for c in defaults})
+        self.check_fields(self._to_write(cards), FIELDS_HINT)
         return cards, log
 
     def _keep_saved_pto(self, cards: list[Card], filled: list[Card]) -> None:

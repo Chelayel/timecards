@@ -147,6 +147,10 @@ hours = 8
   source (e.g. from an earlier fill with other defaults).
   `tc fill --replace` makes the week match the source: hours reset, other editable cards
   deleted (shown in red in the preview). Submitted/frozen cards are never touched.
+- **Custom fields** (e.g. *Admin/Misc* = `u_subcategory`): `tc` finds the fields that tell your
+  cards apart from your history and always reads and copies them, even if the config doesn't
+  list them. It refuses to save or submit a card that lacks one its category always has, such
+  as an admin card with no General / Out of Office, because the instance can't handle those.
 - **Tasks** can be a number, the title ServiceNow displays, or a sys_id (`task_id`). Titles are
   matched against tasks you've logged time on before, since titles repeat across projects.
 - **Week start:** if a created card lands in a different week, it is deleted immediately and
@@ -175,6 +179,7 @@ offers to open the login window and then re-runs your command.
 | `'admin' matches several cards (…)` | Use a more specific word from the list, e.g. `general` instead of `admin`. |
 | `Task '…' not found` | Log time on it once in the portal, or put its sys_id in `task_id`. |
 | `'Submit for Approval' isn't available` | Set `submit_action` to the label in your instance's time card list actions. |
+| `admin has no u_subcategory (General, …). ServiceNow needs it.` | Nothing was saved or submitted. Run `tc init --from-last` so your rows include the field, or set it on that card in the portal. |
 | `PTO isn't set up` | Run `tc init --from-last`, or add the `[pto]` section it shows. |
 | Several identical `admin` rows in `tc discover` / wrong card filled | The cards differ in a custom field: run `tc init --from-last` so the rows get `fields = { … }`. |
 | `Already in this week but not in the source: …` | Check the preview; `tc fill --replace` removes those cards. |

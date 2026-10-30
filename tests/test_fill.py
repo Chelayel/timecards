@@ -185,3 +185,43 @@ def test_suggest_setup_finds_fields_pto_and_a_complete_week(sn):
 def _week_of(sn, wk, general):
     sn.add(wk, "task_work", {d: 7 for d in WEEKDAYS}, task=TASK, u_month="Sep")
     sn.add(wk, "admin", general, u_subcategory="general", u_month="Sep")
+
+
+def _plain_config(sn):
+    """A config that doesn't know about u_subcategory (like a machine set up before it mattered)."""
+    sn.cfg.rows = [config.DefaultRow("", "admin", {d: 8 for d in WEEKDAYS})]
+    sn.cfg.pto, sn.cfg.extra_fields = None, []
+    sn._fields = sn._history = None
+
+
+def test_copy_keeps_fields_the_config_does_not_list(sn):
+    _prev_week(sn)
+    sn.add(PREV, "admin", {}, u_subcategory="pto")  # general and pto in one week: the field tells them apart
+    _plain_config(sn)
+    fill(sn)
+    assert {c.fields.get("u_subcategory") for c in sn.week_cards(WEEK) if c.category == "admin"} == {"general"}
+    assert all(r.get("u_subcategory") for r in sn.db.values() if r["category"] == "admin")
+
+
+def test_refuses_cards_without_a_needed_field(sn):
+    _prev_week(sn)
+    sn.add(PREV, "admin", {}, u_subcategory="pto")  # general and pto in one week: the field tells them apart
+    _plain_config(sn)
+    n = len(sn.db)
+    with pytest.raises(api.ApiError, match="u_subcategory"):
+        fill(sn, use_defaults=True)  # plain "admin" row: no subcategory
+    bad = sn.week_cards(WEEK)  # also when saving directly (e.g. from the TUI)
+    bad.append(api.Card(sys_id=None, task_id="", task_label="", category="admin", hours={**{d: 0.0 for d in config.DAYS}, "monday": 1.0}))
+    with pytest.raises(api.ApiError, match="u_subcategory"):
+        sn.save_cards(WEEK, bad)
+    assert len(sn.db) == n
+
+
+def test_never_copies_a_week_whose_card_lost_its_field(sn):
+    sn.add("2026-09-14", "admin", {d: 1 for d in WEEKDAYS}, u_subcategory="general")
+    sn.add("2026-09-14", "admin", {}, u_subcategory="pto")
+    sn.add(PREV, "task_work", {d: 7 for d in WEEKDAYS}, task=TASK)
+    sn.add(PREV, "admin", {d: 1 for d in WEEKDAYS})  # subcategory missing
+    _plain_config(sn)
+    assert "source   copied from week of 2026-09-14" in fill(sn)
+    assert all(r.get("u_subcategory") for r in sn.db.values() if r["category"] == "admin" and r["week_starts_on"] == "2026-09-28")
